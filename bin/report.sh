@@ -8,6 +8,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 source "$ROOT_DIR/lib/core/common.sh"
 source "$ROOT_DIR/lib/core/history.sh"
+source "$ROOT_DIR/lib/check/ai_tools_report.sh"
 
 REPORT_JSON=false
 REPORT_MARKDOWN=false
@@ -154,6 +155,7 @@ report_render_json() {
     purge_json=$(MOLE_PURGE_NO_CONFIG_WRITE=1 report_run_json_source "purge" "$ROOT_DIR/bin/purge.sh" --json)
     installer_json=$(report_run_json_source "installer" "$ROOT_DIR/bin/installer.sh" --json)
     history_json=$(report_load_history_json)
+    ai_tools_report_collect
 
     local purge_total purge_selected_count installer_total installer_count
     purge_total=$(printf '%s\n' "$purge_json" | report_json_summary_value "total_size_bytes")
@@ -161,13 +163,14 @@ report_render_json() {
     installer_total=$(printf '%s\n' "$installer_json" | report_json_summary_value "total_size_bytes")
     installer_count=$(printf '%s\n' "$installer_json" | report_json_summary_value "item_count")
 
-    local purge_low purge_medium purge_high installer_low installer_medium installer_high
+    local purge_low purge_medium purge_high installer_low installer_medium installer_high ai_low ai_medium ai_high
     read -r purge_low purge_medium purge_high <<< "$(printf '%s\n' "$purge_json" | report_json_risk_totals)"
     read -r installer_low installer_medium installer_high <<< "$(printf '%s\n' "$installer_json" | report_json_risk_totals)"
+    read -r ai_low ai_medium ai_high <<< "$(ai_tools_report_risk_totals)"
 
-    local low_risk_bytes=$((purge_low + installer_low))
-    local medium_risk_bytes=$((purge_medium + installer_medium))
-    local high_risk_bytes=$((purge_high + installer_high))
+    local low_risk_bytes=$((purge_low + installer_low + ai_low))
+    local medium_risk_bytes=$((purge_medium + installer_medium + ai_medium))
+    local high_risk_bytes=$((purge_high + installer_high + ai_high))
     local total_observed_bytes=$((low_risk_bytes + medium_risk_bytes + high_risk_bytes))
     if [[ "$total_observed_bytes" -eq 0 ]]; then
         total_observed_bytes=$((purge_total + installer_total))
@@ -186,7 +189,9 @@ report_render_json() {
     printf '  "developer_projects": '
     printf '%s\n' "$purge_json" | report_json_extract_array "items"
     printf ',\n'
-    printf '  "dev_caches": [],\n'
+    printf '  "dev_caches": '
+    ai_tools_report_render_json_array "cache"
+    printf ',\n'
     printf '  "installers": '
     printf '%s\n' "$installer_json" | report_json_extract_array "items"
     printf ',\n'
@@ -196,7 +201,9 @@ report_render_json() {
     printf '  "recommended_commands": '
     report_recommended_commands_json "$purge_selected_count" "$installer_count"
     printf ',\n'
-    printf '  "protected_or_skipped": []\n'
+    printf '  "protected_or_skipped": '
+    ai_tools_report_render_json_array "protected"
+    printf '\n'
     printf '}\n'
 }
 
@@ -205,6 +212,7 @@ report_render_markdown() {
     purge_json=$(MOLE_PURGE_NO_CONFIG_WRITE=1 report_run_json_source "purge" "$ROOT_DIR/bin/purge.sh" --json)
     installer_json=$(report_run_json_source "installer" "$ROOT_DIR/bin/installer.sh" --json)
     history_json=$(report_load_history_json)
+    ai_tools_report_collect
 
     local purge_total purge_count purge_selected_count installer_total installer_count
     purge_total=$(printf '%s\n' "$purge_json" | report_json_summary_value "total_size_bytes")
@@ -234,7 +242,19 @@ report_render_markdown() {
     echo ""
     echo "## Dev Caches"
     echo ""
-    echo "Developer cache details are reported when conservative source data is available."
+    local ai_cache_count=0 ai_protected_count=0 idx
+    for ((idx = 0; idx < ${#AI_REPORT_PATHS[@]}; idx++)); do
+        if [[ "${AI_REPORT_CATEGORIES[$idx]}" == "ai_tool_cache" ]]; then
+            ai_cache_count=$((ai_cache_count + 1))
+        else
+            ai_protected_count=$((ai_protected_count + 1))
+        fi
+    done
+    if [[ "$ai_cache_count" -gt 0 ]]; then
+        echo "Found $ai_cache_count AI tool cache item(s). Review manually before removing tool data."
+    else
+        echo "No AI tool cache items were found in the conservative audit paths."
+    fi
     echo ""
     echo "## Installers"
     echo ""
@@ -264,6 +284,9 @@ report_render_markdown() {
     echo "## Protected Or Manual Review"
     echo ""
     echo "Protected, session, config, credential-adjacent, history, and database items are not auto-cleaned by this report."
+    if [[ "$ai_protected_count" -gt 0 ]]; then
+        echo "Found $ai_protected_count AI tool item(s) that require manual review."
+    fi
     echo "Use the recommended commands above to review safe existing Mole cleanup paths."
 }
 
