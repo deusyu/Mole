@@ -15,6 +15,7 @@ _MOLE_CORE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Load core modules
 source "$_MOLE_CORE_DIR/base.sh"
 prepare_mole_tmpdir > /dev/null
+source "$_MOLE_CORE_DIR/json.sh"
 source "$_MOLE_CORE_DIR/log.sh"
 
 source "$_MOLE_CORE_DIR/timeout.sh"

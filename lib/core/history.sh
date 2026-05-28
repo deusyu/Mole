@@ -13,6 +13,11 @@ if [[ -z "${MOLE_BASE_LOADED:-}" ]]; then
     # shellcheck source=lib/core/base.sh
     source "$_MOLE_CORE_DIR/base.sh"
 fi
+if [[ -z "${MOLE_JSON_LOADED:-}" ]]; then
+    _MOLE_CORE_DIR="${_MOLE_CORE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+    # shellcheck source=lib/core/json.sh
+    source "$_MOLE_CORE_DIR/json.sh"
+fi
 
 readonly MOLE_HISTORY_DEFAULT_LIMIT=20
 readonly MOLE_HISTORY_MAX_LIMIT=200
@@ -344,61 +349,19 @@ history_size_label() {
 }
 
 history_json_escape() {
-    local value="${1:-}"
-    local LC_ALL=C
-    local char code idx
-
-    idx=0
-    while [[ "$idx" -lt "${#value}" ]]; do
-        char="${value:$idx:1}"
-        case "$char" in
-            "\\") printf '%s' "\\\\" ;;
-            "\"") printf '%s' "\\\"" ;;
-            $'\b') printf '%s' "\\b" ;;
-            $'\f') printf '%s' "\\f" ;;
-            $'\n') printf '%s' "\\n" ;;
-            $'\r') printf '%s' "\\r" ;;
-            $'\t') printf '%s' "\\t" ;;
-            *)
-                printf -v code '%d' "'$char"
-                if [[ "$code" -lt 0 ]]; then
-                    code=$((code + 256))
-                fi
-                if [[ "$code" -lt 32 ]]; then
-                    printf '\\u%04x' "$code"
-                else
-                    printf '%s' "$char"
-                fi
-                ;;
-        esac
-        idx=$((idx + 1))
-    done
+    mole_json_escape "${1:-}"
 }
 
 history_json_string() {
-    printf '"'
-    history_json_escape "${1:-}"
-    printf '"'
+    mole_json_string "${1:-}"
 }
 
 history_json_string_field() {
-    local indent="$1"
-    local key="$2"
-    local value="${3:-}"
-    local suffix="${4-,}"
-
-    printf '%s"%s": ' "$indent" "$key"
-    history_json_string "$value"
-    printf '%s\n' "$suffix"
+    mole_json_string_field "$@"
 }
 
 history_json_number_field() {
-    local indent="$1"
-    local key="$2"
-    local value="$3"
-    local suffix="${4-,}"
-
-    printf '%s"%s": %s%s\n' "$indent" "$key" "$value" "$suffix"
+    mole_json_number_field "$@"
 }
 
 history_render_text() {
