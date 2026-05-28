@@ -52,6 +52,8 @@ mo uninstall                 # Remove installed apps + their leftovers
 mo optimize                  # Refresh caches & services
 mo analyze                   # Visual disk explorer (or 'mo analyse')
 mo status                    # Live system health dashboard
+mo report --markdown         # Developer space audit report
+mo report --json             # Machine-readable developer space audit
 mo purge                     # Clean project build artifacts
 mo installer                 # Find and remove installer files
 
@@ -223,7 +225,7 @@ When enabled, `mo status` shows a read-only alert banner for processes that stay
 
 #### Machine-Readable Output
 
-`mo analyze`, `mo status`, `mo history`, `mo installer`, and the app inventory from `mo uninstall --list` support JSON output for scripting and automation.
+`mo analyze`, `mo status`, `mo history`, `mo report`, `mo installer`, and the app inventory from `mo uninstall --list` support JSON output for scripting and automation.
 
 `mo status` also auto-detects when its output is piped (not a terminal) and switches to JSON automatically.
 
@@ -280,6 +282,16 @@ $ mo installer --json
   "command": "installer",
   "items": [ ... ],
   "summary": { "total_size_bytes": 0, "item_count": 0, ... }
+}
+
+# Developer space audit as JSON
+$ mo report --json
+{
+  "schema_version": 1,
+  "command": "report",
+  "developer_projects": [ ... ],
+  "installers": [ ... ],
+  "recommended_commands": [ "mo analyze", "mo history --json" ]
 }
 ```
 
