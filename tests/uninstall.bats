@@ -1770,6 +1770,67 @@ INNER
 	fi
 }
 
+@test "uninstall --list --json explicitly emits JSON array" {
+	local apps_cache
+	apps_cache="$(mktemp "${BATS_TEST_TMPDIR:-$BATS_RUN_TMPDIR:-$HOME}/tmp-list-explicit-json.XXXXXX")"
+	cat > "$apps_cache" <<'CACHE'
+1700000000|/Applications/Slack.app|Slack|com.tinyspeck.slackmacgap|180MB|Today|184320
+CACHE
+
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 \
+		APPS_CACHE_FILE="$apps_cache" bash --noprofile --norc <<'INNER'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+
+log_operation_session_start() { :; }
+show_uninstall_help() { :; }
+hide_cursor() { :; }
+show_cursor() { :; }
+clear_screen() { :; }
+scan_applications() { printf '%s\n' "$APPS_CACHE_FILE"; }
+load_applications() {
+    apps_data=()
+    while IFS='|' read -r epoch app_path app_name bundle_id size last_used size_kb; do
+        apps_data+=("$epoch|$app_path|$app_name|$bundle_id|$size|$last_used|${size_kb:-0}")
+    done < "$1"
+}
+is_homebrew_available() { return 1; }
+get_brew_cask_name() { return 1; }
+uninstall_normalize_size_display() { local s="${1:-}"; [[ -z "$s" || "$s" == "0" || "$s" == "Unknown" ]] && echo "N/A" || echo "$s"; }
+
+eval "$(sed -n '/^uninstall_list_json_escape()/,/^main "\$@"/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
+main --list --json
+INNER
+
+	rm -f "$apps_cache"
+	[ "$status" -eq 0 ]
+	if command -v python3 > /dev/null; then
+		echo "$output" | python3 -c 'import sys, json; d=json.load(sys.stdin); assert d[0]["path"] == "/Applications/Slack.app"'
+	fi
+}
+
+@test "uninstall --json without --list fails before destructive flow" {
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 bash --noprofile --norc <<'INNER'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+
+log_operation_session_start() { :; }
+show_uninstall_help() { :; }
+hide_cursor() { echo "HIDE_CURSOR_CALLED"; }
+show_cursor() { :; }
+clear_screen() { :; }
+scan_applications() { echo "SCAN_CALLED"; return 1; }
+
+eval "$(sed -n '/^uninstall_list_json_escape()/,/^main "\$@"/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
+main --json
+INNER
+
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"--json option is only supported"* ]]
+	[[ "$output" != *"HIDE_CURSOR_CALLED"* ]]
+	[[ "$output" != *"SCAN_CALLED"* ]]
+}
+
 @test "uninstall --list with empty scan returns empty JSON array" {
 	local apps_cache
 	apps_cache="$(mktemp "${BATS_TEST_TMPDIR:-$BATS_RUN_TMPDIR:-$HOME}/tmp-list-empty.XXXXXX")"

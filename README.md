@@ -71,7 +71,9 @@ mo clean --dry-run
 mo uninstall --dry-run
 mo history
 mo history --json
+mo uninstall --list --json
 mo purge --dry-run
+mo installer --json
 
 # Also works with: optimize, installer, remove, completion, touchid enable
 mo clean --dry-run --debug   # Preview + detailed logs
@@ -221,7 +223,7 @@ When enabled, `mo status` shows a read-only alert banner for processes that stay
 
 #### Machine-Readable Output
 
-Both `mo analyze` and `mo status` support a `--json` flag for scripting and automation.
+`mo analyze`, `mo status`, `mo history`, `mo installer`, and the app inventory from `mo uninstall --list` support JSON output for scripting and automation.
 
 `mo status` also auto-detects when its output is piped (not a terminal) and switches to JSON automatically.
 
@@ -257,6 +259,28 @@ $ mo status --json
 # Auto-detected JSON when piped
 $ mo status | jq '.health_score'
 92
+
+# Installed app inventory as JSON
+$ mo uninstall --list --json
+[
+  {
+    "name": "Slack",
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "source": "App",
+    "uninstall_name": "Slack",
+    "path": "/Applications/Slack.app",
+    "size": "180MB"
+  }
+]
+
+# Installer inventory as JSON, read-only
+$ mo installer --json
+{
+  "schema_version": 1,
+  "command": "installer",
+  "items": [ ... ],
+  "summary": { "total_size_bytes": 0, "item_count": 0, ... }
+}
 ```
 
 ### Project Artifact Purge
