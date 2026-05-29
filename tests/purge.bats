@@ -149,6 +149,103 @@ EOF
 	[[ "$output" == \~/www/app/node_modules ]]
 }
 
+@test "purge --json emits empty read-only inventory without writing config" {
+	local json_home
+	json_home="$(mktemp -d "${BATS_TEST_TMPDIR:-$BATS_RUN_TMPDIR}/purge-json-empty.XXXXXX")"
+	mkdir -p "$json_home"
+
+	run env HOME="$json_home" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 "$PROJECT_ROOT/bin/purge.sh" --json
+
+	[ "$status" -eq 0 ]
+	[ ! -e "$json_home/.config/mole/purge_paths" ]
+	printf '%s\n' "$output" | python3 -c '
+import json
+import sys
+data = json.load(sys.stdin)
+assert data["schema_version"] == 1
+assert data["command"] == "purge"
+assert data["items"] == []
+assert data["summary"]["item_count"] == 0
+'
+}
+
+@test "purge --json reports old project artifacts without deleting" {
+	local json_home
+	json_home="$(mktemp -d "${BATS_TEST_TMPDIR:-$BATS_RUN_TMPDIR}/purge-json-old.XXXXXX")"
+	mkdir -p "$json_home/www/test-project/node_modules"
+	echo "{}" > "$json_home/www/test-project/package.json"
+	echo "module" > "$json_home/www/test-project/node_modules/file.js"
+	touch -t 202001010101 "$json_home/www/test-project/node_modules" "$json_home/www/test-project/package.json" "$json_home/www/test-project"
+
+	run env HOME="$json_home" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 "$PROJECT_ROOT/bin/purge.sh" --json
+
+	[ "$status" -eq 0 ]
+	[ -d "$json_home/www/test-project/node_modules" ]
+	printf '%s\n' "$output" | python3 -c '
+import json
+import sys
+data = json.load(sys.stdin)
+assert len(data["items"]) == 1
+item = data["items"][0]
+assert item["path"].endswith("/www/test-project/node_modules")
+assert item["name"] == "node_modules"
+assert item["category"] == "project_artifact"
+assert item["ecosystem"] == "node"
+assert item["risk_level"] == "low"
+assert item["selected_by_default"] is True
+assert item["protected"] is False
+assert item["whitelisted"] is False
+assert item["recommended_action"] == "purge"
+assert item["project_name"] == "test-project"
+assert data["summary"]["item_count"] == 1
+assert data["summary"]["selected_count"] == 1
+'
+}
+
+@test "purge --json keeps recent artifacts unselected" {
+	local json_home
+	json_home="$(mktemp -d "${BATS_TEST_TMPDIR:-$BATS_RUN_TMPDIR}/purge-json-recent.XXXXXX")"
+	mkdir -p "$json_home/www/recent-project/node_modules"
+	echo "{}" > "$json_home/www/recent-project/package.json"
+
+	run env HOME="$json_home" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 "$PROJECT_ROOT/bin/purge.sh" --json
+
+	[ "$status" -eq 0 ]
+	printf '%s\n' "$output" | python3 -c '
+import json
+import sys
+data = json.load(sys.stdin)
+item = data["items"][0]
+assert item["selected_by_default"] is False
+assert "Recently modified" in item["risk_reason"]
+assert data["summary"]["selected_count"] == 0
+'
+}
+
+@test "purge --json marks whitelisted artifacts unselected" {
+	local json_home
+	json_home="$(mktemp -d "${BATS_TEST_TMPDIR:-$BATS_RUN_TMPDIR}/purge-json-whitelist.XXXXXX")"
+	mkdir -p "$json_home/www/whitelist-project/node_modules"
+	mkdir -p "$json_home/.config/mole"
+	echo "{}" > "$json_home/www/whitelist-project/package.json"
+	printf '%s\n' "$json_home/www/whitelist-project/node_modules" > "$json_home/.config/mole/whitelist"
+	touch -t 202001010101 "$json_home/www/whitelist-project/node_modules" "$json_home/www/whitelist-project/package.json" "$json_home/www/whitelist-project"
+
+	run env HOME="$json_home" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 "$PROJECT_ROOT/bin/purge.sh" --json
+
+	[ "$status" -eq 0 ]
+	printf '%s\n' "$output" | python3 -c '
+import json
+import sys
+data = json.load(sys.stdin)
+item = data["items"][0]
+assert item["whitelisted"] is True
+assert item["risk_level"] == "high"
+assert item["selected_by_default"] is False
+assert data["summary"]["selected_count"] == 0
+'
+}
+
 @test "filter_nested_artifacts: removes nested node_modules" {
 	mkdir -p "$HOME/www/project/node_modules/package/node_modules"
 

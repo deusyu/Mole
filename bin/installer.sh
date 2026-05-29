@@ -136,6 +136,7 @@ declare -i total_delete_failed=0
 declare -a INSTALLER_PATHS=()
 declare -a INSTALLER_SIZES=()
 declare -a INSTALLER_SOURCES=()
+declare -a INSTALLER_NAMES=()
 declare -a DISPLAY_NAMES=()
 declare -a INSTALLER_DELETE_PATHS=()
 declare -a INSTALLER_DELETE_SIZES=()
@@ -215,10 +216,11 @@ collect_installers() {
     INSTALLER_PATHS=()
     INSTALLER_SIZES=()
     INSTALLER_SOURCES=()
+    INSTALLER_NAMES=()
     DISPLAY_NAMES=()
 
     # Start scanning with spinner
-    if [[ -t 1 ]]; then
+    if [[ -t 1 && "${MOLE_INSTALLER_QUIET:-0}" != "1" ]]; then
         start_inline_spinner "Scanning for installers..."
     fi
 
@@ -234,19 +236,19 @@ collect_installers() {
         debug_file_action "Found installer" "$file"
     done < <(scan_all_installers | sort -u)
 
-    if [[ -t 1 ]]; then
+    if [[ -t 1 && "${MOLE_INSTALLER_QUIET:-0}" != "1" ]]; then
         stop_inline_spinner
     fi
 
     if [[ ${#all_files[@]} -eq 0 ]]; then
-        if [[ "${IN_ALT_SCREEN:-0}" != "1" ]]; then
+        if [[ "${IN_ALT_SCREEN:-0}" != "1" && "${MOLE_INSTALLER_QUIET:-0}" != "1" ]]; then
             echo -e "${GREEN}${ICON_SUCCESS}${NC} Great! No installer files to clean"
         fi
         return 1
     fi
 
     # Calculate sizes with spinner
-    if [[ -t 1 ]]; then
+    if [[ -t 1 && "${MOLE_INSTALLER_QUIET:-0}" != "1" ]]; then
         start_inline_spinner "Calculating sizes..."
     fi
 
@@ -285,13 +287,82 @@ collect_installers() {
         INSTALLER_PATHS+=("$file")
         INSTALLER_SIZES+=("$file_size")
         INSTALLER_SOURCES+=("$source")
+        INSTALLER_NAMES+=("$display_name")
         DISPLAY_NAMES+=("$display")
     done
 
-    if [[ -t 1 ]]; then
+    if [[ -t 1 && "${MOLE_INSTALLER_QUIET:-0}" != "1" ]]; then
         stop_inline_spinner
     fi
     return 0
+}
+
+installer_render_json() {
+    export MOLE_INSTALLER_QUIET=1
+    collect_installers || true
+
+    local total_size=0
+    local item_count=${#INSTALLER_PATHS[@]}
+    local idx
+    for ((idx = 0; idx < item_count; idx++)); do
+        local size="${INSTALLER_SIZES[$idx]:-0}"
+        [[ "$size" =~ ^[0-9]+$ ]] || size=0
+        total_size=$((total_size + size))
+    done
+
+    printf '{\n'
+    mole_json_number_field "  " "schema_version" 1
+    mole_json_string_field "  " "command" "installer"
+    printf '  "items": ['
+    if [[ $item_count -gt 0 ]]; then
+        printf '\n'
+        for ((idx = 0; idx < item_count; idx++)); do
+            [[ $idx -gt 0 ]] && printf ',\n'
+            local path="${INSTALLER_PATHS[$idx]}"
+            local name="${INSTALLER_NAMES[$idx]:-${path##*/}}"
+            local size="${INSTALLER_SIZES[$idx]:-0}"
+            local protected=false
+            local whitelisted=false
+            local risk_level="medium"
+            local risk_reason="Installer file, review whether it is still needed"
+
+            [[ "$size" =~ ^[0-9]+$ ]] || size=0
+            if declare -f should_protect_path > /dev/null 2>&1 && should_protect_path "$path" 2> /dev/null; then
+                protected=true
+                risk_level="high"
+                risk_reason="Protected path, manual review required"
+            fi
+            if declare -f is_path_whitelisted > /dev/null 2>&1 && is_path_whitelisted "$path" 2> /dev/null; then
+                whitelisted=true
+                risk_level="high"
+                risk_reason="Whitelisted path, manual review required"
+            fi
+
+            printf '    {\n'
+            mole_json_string_field "      " "path" "$path"
+            mole_json_string_field "      " "name" "$name"
+            mole_json_string_field "      " "category" "installer"
+            mole_json_null_field "      " "ecosystem"
+            mole_json_number_field "      " "size_bytes" "$size"
+            mole_json_string_field "      " "risk_level" "$risk_level"
+            mole_json_string_field "      " "risk_reason" "$risk_reason"
+            mole_json_bool_field "      " "recoverable" false
+            mole_json_bool_field "      " "protected" "$protected"
+            mole_json_bool_field "      " "whitelisted" "$whitelisted"
+            mole_json_bool_field "      " "selected_by_default" false
+            mole_json_string_field "      " "recommended_action" "installer" ""
+            printf '    }'
+        done
+        printf '\n'
+    fi
+    printf '  ],\n'
+    printf '  "summary": {\n'
+    mole_json_number_field "    " "total_size_bytes" "$total_size"
+    mole_json_number_field "    " "item_count" "$item_count"
+    mole_json_number_field "    " "selected_size_bytes" 0
+    mole_json_number_field "    " "selected_count" 0 ""
+    printf '  }\n'
+    printf '}\n'
 }
 
 # Installer selector with Select All / Invert support
@@ -809,6 +880,7 @@ show_summary() {
 }
 
 main() {
+    local json_mode=0
     for arg in "$@"; do
         case "$arg" in
             "--help" | "-h")
@@ -821,12 +893,20 @@ main() {
             "--dry-run" | "-n")
                 export MOLE_DRY_RUN=1
                 ;;
+            "--json")
+                json_mode=1
+                ;;
             *)
                 echo "Unknown option: $arg"
                 exit 1
                 ;;
         esac
     done
+
+    if [[ $json_mode -eq 1 ]]; then
+        installer_render_json
+        return 0
+    fi
 
     if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
         echo -e "${YELLOW}${ICON_DRY_RUN} DRY RUN MODE${NC}, No installer files will be removed"

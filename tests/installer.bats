@@ -60,6 +60,76 @@ setup() {
 	[[ "$output" == *"DRY RUN MODE"* ]]
 }
 
+@test "installer.sh --json emits empty read-only inventory" {
+	run env HOME="$HOME" TERM="xterm-256color" MOLE_TEST_NO_AUTH=1 "$PROJECT_ROOT/bin/installer.sh" --json
+
+	[ "$status" -eq 0 ]
+	printf '%s\n' "$output" | python3 -c '
+import json
+import sys
+data = json.load(sys.stdin)
+assert data["schema_version"] == 1
+assert data["command"] == "installer"
+assert data["items"] == []
+assert data["summary"]["item_count"] == 0
+'
+	[[ "$output" != *"Great! No installer files to clean"* ]]
+}
+
+@test "installer.sh --json reports installer item fields" {
+	printf 'installer' > "$HOME/Downloads/Test App.dmg"
+
+	run env HOME="$HOME" TERM="xterm-256color" MOLE_TEST_NO_AUTH=1 "$PROJECT_ROOT/bin/installer.sh" --json
+
+	[ "$status" -eq 0 ]
+	printf '%s\n' "$output" | python3 -c '
+import json
+import os
+import sys
+data = json.load(sys.stdin)
+items = data["items"]
+assert len(items) == 1
+item = items[0]
+assert item["path"].endswith("/Downloads/Test App.dmg")
+assert item["name"] == "Test App.dmg"
+assert item["category"] == "installer"
+assert item["ecosystem"] is None
+assert item["size_bytes"] >= 0
+assert item["risk_level"] == "medium"
+assert item["recoverable"] is False
+assert item["selected_by_default"] is False
+assert item["recommended_action"] == "installer"
+assert data["summary"]["item_count"] == 1
+assert data["summary"]["total_size_bytes"] == item["size_bytes"]
+'
+}
+
+@test "installer.sh --json is read-only and marks whitelist" {
+	printf 'installer' > "$HOME/Downloads/Whitelisted.dmg"
+
+	run env HOME="$HOME" TERM="$TERM" MOLE_TEST_NO_AUTH=1 PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+set -euo pipefail
+export MOLE_TEST_MODE=1
+source "$PROJECT_ROOT/bin/installer.sh"
+WHITELIST_PATTERNS=("$HOME/Downloads/Whitelisted.dmg")
+mole_delete() { echo "DELETE_CALLED"; return 1; }
+main --json
+EOF
+
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"DELETE_CALLED"* ]]
+	printf '%s\n' "$output" | python3 -c '
+import json
+import sys
+data = json.load(sys.stdin)
+item = data["items"][0]
+assert item["whitelisted"] is True
+assert item["protected"] is False
+assert item["risk_level"] == "high"
+assert item["selected_by_default"] is False
+'
+}
+
 # Test scan_installers_in_path function directly
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

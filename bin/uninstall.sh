@@ -1345,18 +1345,9 @@ match_apps_by_name() {
     done
 }
 
-# Escape a value for embedding in a single-line JSON string. Only handles
-# the chars that would break a one-line value: backslash, quote, and C0
-# whitespace. Bundle IDs / display names never contain control bytes worth
-# preserving in this output.
+# Compatibility wrapper for tests and older internal callers.
 uninstall_list_json_escape() {
-    local s="$1"
-    s="${s//\\/\\\\}"
-    s="${s//\"/\\\"}"
-    s="${s//$'\t'/ }"
-    s="${s//$'\r'/ }"
-    s="${s//$'\n'/ }"
-    printf '%s' "$s"
+    mole_json_escape "${1:-}"
 }
 
 # Read-only listing: surface each installed app's display name, bundle id,
@@ -1364,24 +1355,36 @@ uninstall_list_json_escape() {
 # existing scanner so the output stays in lockstep with what the destructive
 # path sees.
 uninstall_list_apps() {
+    # Auto-switch to JSON when stdout is piped, matching `mo status`.
+    local format="text"
+    if [[ "${UNINSTALL_LIST_JSON:-0}" == "1" || ! -t 1 ]]; then
+        format="json"
+    fi
+
     local apps_file=""
     if ! apps_file=$(scan_applications); then
+        if [[ "$format" == "json" ]]; then
+            printf '[]\n'
+            return 0
+        fi
         return 1
     fi
     if [[ ! -f "$apps_file" ]]; then
+        if [[ "$format" == "json" ]]; then
+            printf '[]\n'
+            return 0
+        fi
         return 1
     fi
     if ! load_applications "$apps_file"; then
         rm -f "$apps_file"
+        if [[ "$format" == "json" ]]; then
+            printf '[]\n'
+            return 0
+        fi
         return 1
     fi
     rm -f "$apps_file"
-
-    # Auto-switch to JSON when stdout is piped, matching `mo status`.
-    local format="text"
-    if [[ ! -t 1 ]]; then
-        format="json"
-    fi
 
     if [[ "$format" == "json" ]]; then
         printf '['
@@ -1404,13 +1407,19 @@ uninstall_list_apps() {
             else
                 printf ',\n'
             fi
-            printf '  {"name": "%s", "bundle_id": "%s", "source": "%s", "uninstall_name": "%s", "path": "%s", "size": "%s"}' \
-                "$(uninstall_list_json_escape "$app_name")" \
-                "$(uninstall_list_json_escape "$bundle_id")" \
-                "$source_label" \
-                "$(uninstall_list_json_escape "$uninstall_name")" \
-                "$(uninstall_list_json_escape "$app_path")" \
-                "$(uninstall_list_json_escape "$size_display")"
+            printf '  {"name": '
+            mole_json_string "$app_name"
+            printf ', "bundle_id": '
+            mole_json_string "$bundle_id"
+            printf ', "source": '
+            mole_json_string "$source_label"
+            printf ', "uninstall_name": '
+            mole_json_string "$uninstall_name"
+            printf ', "path": '
+            mole_json_string "$app_path"
+            printf ', "size": '
+            mole_json_string "$size_display"
+            printf '}'
         done
         if [[ $first -eq 0 ]]; then
             printf '\n'
@@ -1484,6 +1493,7 @@ main() {
     # Parse flags and collect app name arguments
     local -a app_name_args=()
     local list_mode=0
+    local json_mode=0
     for arg in "$@"; do
         case "$arg" in
             "--help" | "-h")
@@ -1502,6 +1512,9 @@ main() {
             "--list")
                 list_mode=1
                 ;;
+            "--json")
+                json_mode=1
+                ;;
             "--whitelist")
                 echo "Unknown uninstall option: $arg"
                 echo "Whitelist management is currently supported by: mo clean --whitelist / mo optimize --whitelist"
@@ -1519,9 +1532,16 @@ main() {
         esac
     done
 
+    if [[ $json_mode -eq 1 && $list_mode -ne 1 ]]; then
+        echo "The --json option is only supported with read-only list mode: mo uninstall --list --json" >&2
+        echo "Use 'mo uninstall --help' for supported options." >&2
+        return 1
+    fi
+
     # --list short-circuits before any destructive code. Read-only path:
     # scan, resolve uninstall names, print table or JSON, exit 0.
     if [[ $list_mode -eq 1 ]]; then
+        [[ $json_mode -eq 1 ]] && UNINSTALL_LIST_JSON=1
         uninstall_list_apps
         return $?
     fi

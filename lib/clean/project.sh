@@ -134,8 +134,17 @@ EOF
     # from `mo purge --paths` passes only the header with no paths).
     if [[ ${#paths[@]} -gt 0 ]]; then
         for path in "${paths[@]}"; do
-            # Convert $HOME to ~ for portability
-            path="${path/#$HOME/~}"
+            # Convert $HOME to ~ for portability. Keep this inline because
+            # load_purge_config may call save_discovered_paths while this file
+            # is still being sourced, before later helper functions exist.
+            case "$path" in
+                "$HOME")
+                    path="~"
+                    ;;
+                "$HOME"/*)
+                    path="~/${path#"$HOME"/}"
+                    ;;
+            esac
             if ! printf '%s\n' "$path" >> "$tmp_file"; then
                 rm -f "$tmp_file" 2> /dev/null || true
                 return 1
@@ -186,7 +195,11 @@ load_purge_config() {
 
         if [[ ${#discovered[@]} -gt 0 ]]; then
             PURGE_SEARCH_PATHS=("${discovered[@]}")
-            if save_discovered_paths "${discovered[@]}"; then
+            if [[ "${MOLE_PURGE_NO_CONFIG_WRITE:-0}" == "1" ]]; then
+                if [[ -t 1 ]] && [[ -z "${_PURGE_DISCOVERY_SILENT:-}" ]]; then
+                    echo -e "${GRAY}Found ${#discovered[@]} project directories, using them for this read-only run${NC}" >&2
+                fi
+            elif save_discovered_paths "${discovered[@]}"; then
                 if [[ -t 1 ]] && [[ -z "${_PURGE_DISCOVERY_SILENT:-}" ]]; then
                     echo -e "${GRAY}Found ${#discovered[@]} project directories, saved to config${NC}" >&2
                 fi
@@ -204,7 +217,17 @@ load_purge_config
 
 format_purge_target_path() {
     local path="$1"
-    echo "${path/#$HOME/~}"
+    case "$path" in
+        "$HOME")
+            echo "~"
+            ;;
+        "$HOME"/*)
+            echo "~/${path#"$HOME"/}"
+            ;;
+        *)
+            echo "$path"
+            ;;
+    esac
 }
 
 compact_purge_menu_path() {
@@ -577,6 +600,354 @@ filter_protected_artifacts() {
         fi
     done
 }
+
+mole_purge_load_whitelist_for_readonly_report() {
+    if ! declare -p WHITELIST_PATTERNS > /dev/null 2>&1; then
+        WHITELIST_PATTERNS=()
+    fi
+
+    local -a patterns=()
+    local config_file="$HOME/.config/mole/whitelist"
+    if [[ -f "$config_file" ]]; then
+        local line
+        while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [[ -z "$line" || "$line" =~ ^# ]] && continue
+            patterns+=("${line/#\~/$HOME}")
+        done < "$config_file"
+    elif [[ ${#WHITELIST_PATTERNS[@]} -eq 0 && ${#DEFAULT_WHITELIST_PATTERNS[@]} -gt 0 ]]; then
+        patterns=("${DEFAULT_WHITELIST_PATTERNS[@]}")
+    fi
+
+    if [[ ${#patterns[@]} -gt 0 ]]; then
+        WHITELIST_PATTERNS=("${patterns[@]}")
+    fi
+}
+
+find_purge_project_root_for_artifact() {
+    local path="$1"
+    local current_dir="${path%/*}"
+    [[ -z "$current_dir" ]] && current_dir="/"
+    local monorepo_root=""
+    local project_root=""
+
+    while [[ "$current_dir" != "/" && "$current_dir" != "$HOME" && -n "$current_dir" ]]; do
+        if [[ -z "$monorepo_root" ]]; then
+            local indicator
+            for indicator in "${MONOREPO_INDICATORS[@]}"; do
+                if [[ -e "$current_dir/$indicator" ]]; then
+                    monorepo_root="$current_dir"
+                    break
+                fi
+            done
+        fi
+
+        if [[ -z "$project_root" ]]; then
+            local indicator
+            for indicator in "${PROJECT_INDICATORS[@]}"; do
+                if [[ -e "$current_dir/$indicator" ]]; then
+                    project_root="$current_dir"
+                    break
+                fi
+            done
+        fi
+
+        if [[ -n "$monorepo_root" ]]; then
+            break
+        fi
+
+        local _rel="${current_dir#"$HOME"}"
+        local _stripped="${_rel//\//}"
+        local depth=$((${#_rel} - ${#_stripped}))
+        if [[ -n "$project_root" && $depth -lt 2 ]]; then
+            break
+        fi
+
+        local _parent="${current_dir%/*}"
+        current_dir="${_parent:-/}"
+    done
+
+    if [[ -n "$monorepo_root" ]]; then
+        echo "$monorepo_root"
+        return 0
+    fi
+
+    if [[ -n "$project_root" ]]; then
+        echo "$project_root"
+        return 0
+    fi
+
+    return 1
+}
+
+get_purge_project_name() {
+    local path="$1"
+    local project_root=""
+
+    if project_root=$(find_purge_project_root_for_artifact "$path"); then
+        echo "${project_root##*/}"
+        return 0
+    fi
+
+    local root
+    for root in "${PURGE_SEARCH_PATHS[@]+"${PURGE_SEARCH_PATHS[@]}"}"; do
+        root="${root%/}"
+        if [[ -n "$root" && "$path" == "$root/"* ]]; then
+            local relative_path="${path#"$root"/}"
+            echo "${relative_path%%/*}"
+            return 0
+        fi
+    done
+
+    local fallback="${path%/*}"
+    fallback="${fallback%/*}"
+    echo "${fallback##*/}"
+}
+
+get_purge_project_path() {
+    local path="$1"
+    local project_root=""
+    if ! project_root=$(find_purge_project_root_for_artifact "$path"); then
+        project_root="${path%/*}"
+    fi
+    echo "$project_root"
+}
+
+mole_purge_ecosystem_for_artifact() {
+    local path="$1"
+    local base="${path##*/}"
+    local project_root
+    project_root=$(get_purge_project_path "$path")
+
+    case "$base" in
+        node_modules | .next | .nuxt | .output | .turbo | .parcel-cache | dist)
+            echo "node"
+            return 0
+            ;;
+        venv | .venv | .pytest_cache | .mypy_cache | .tox | .nox | .ruff_cache | __pycache__)
+            echo "python"
+            return 0
+            ;;
+        Pods | .cxx)
+            echo "ios"
+            return 0
+            ;;
+        .dart_tool)
+            echo "dart"
+            return 0
+            ;;
+        .zig-cache | zig-out)
+            echo "zig"
+            return 0
+            ;;
+        vendor)
+            if [[ -f "$project_root/composer.json" ]]; then
+                echo "php"
+                return 0
+            fi
+            ;;
+        .build)
+            if [[ -f "$project_root/Package.swift" ]]; then
+                echo "swift"
+                return 0
+            fi
+            ;;
+        target)
+            if [[ -f "$project_root/Cargo.toml" ]]; then
+                echo "rust"
+                return 0
+            fi
+            if [[ -f "$project_root/pom.xml" || -f "$project_root/build.gradle" ]]; then
+                echo "java"
+                return 0
+            fi
+            ;;
+        .gradle)
+            echo "java"
+            return 0
+            ;;
+        build)
+            if [[ -f "$project_root/pom.xml" || -f "$project_root/build.gradle" ]]; then
+                echo "java"
+                return 0
+            fi
+            ;;
+    esac
+
+    echo "unknown"
+}
+
+mole_purge_collect_json_items() {
+    mole_purge_load_whitelist_for_readonly_report
+
+    PURGE_JSON_PATHS=()
+    PURGE_JSON_PROJECT_ROOTS=()
+    PURGE_JSON_PROJECT_NAMES=()
+    PURGE_JSON_NAMES=()
+    PURGE_JSON_SIZES_KB=()
+    PURGE_JSON_SIZE_UNKNOWN=()
+    PURGE_JSON_RECENT_FLAGS=()
+    PURGE_JSON_SELECTED_DEFAULT=()
+    PURGE_JSON_ECOSYSTEMS=()
+    PURGE_JSON_PROTECTED=()
+    PURGE_JSON_WHITELISTED=()
+    PURGE_JSON_RISK_LEVELS=()
+    PURGE_JSON_RISK_REASONS=()
+
+    local stats_dir="${XDG_CACHE_HOME:-$HOME/.cache}/mole"
+    ensure_user_dir "$stats_dir"
+    echo "" > "$stats_dir/purge_scanning" 2> /dev/null || true
+
+    local -a all_found_items=()
+    local search_path scan_output item
+    for search_path in "${PURGE_SEARCH_PATHS[@]+"${PURGE_SEARCH_PATHS[@]}"}"; do
+        [[ -d "$search_path" ]] || continue
+        scan_output=$(mktemp_file "mole-purge-json-scan") || return 1
+        scan_purge_targets "$search_path" "$scan_output"
+        if [[ -s "$scan_output" ]]; then
+            while IFS= read -r item; do
+                [[ -n "$item" ]] && all_found_items+=("$item")
+            done < "$scan_output"
+        fi
+        rm -f "$scan_output" 2> /dev/null || true
+    done
+    rm -f "$stats_dir/purge_scanning" 2> /dev/null || true
+
+    if [[ ${#all_found_items[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    local dedupe_output
+    dedupe_output=$(mktemp_file "mole-purge-json-dedupe") || return 1
+    printf '%s\n' "${all_found_items[@]}" | LC_COLLATE=C sort -u > "$dedupe_output"
+
+    local now_epoch
+    now_epoch=$(get_epoch_seconds)
+    while IFS= read -r item; do
+        [[ -n "$item" ]] || continue
+
+        local size_raw size_kb size_unknown=false
+        size_raw=$(get_dir_size_kb "$item" 2> /dev/null || echo "ERROR")
+        if [[ "$size_raw" == "TIMEOUT" ]]; then
+            size_kb=0
+            size_unknown=true
+        elif [[ "$size_raw" =~ ^[0-9]+$ ]]; then
+            size_kb="$size_raw"
+            if [[ $size_kb -eq 0 && "${MOLE_PURGE_INCLUDE_EMPTY:-0}" != "1" ]]; then
+                continue
+            fi
+        else
+            continue
+        fi
+
+        local recent=false protected=false whitelisted=false selected=true risk_level="low" risk_reason="Regenerable project artifact"
+        if is_recently_modified "$item" "$now_epoch"; then
+            recent=true
+            selected=false
+            risk_reason="Recently modified project artifact"
+        fi
+        if declare -f should_protect_path > /dev/null 2>&1 && should_protect_path "$item" 2> /dev/null; then
+            protected=true
+            selected=false
+            risk_level="high"
+            risk_reason="Protected path, manual review required"
+        fi
+        if declare -f is_path_whitelisted > /dev/null 2>&1 && is_path_whitelisted "$item" 2> /dev/null; then
+            whitelisted=true
+            selected=false
+            risk_level="high"
+            risk_reason="Whitelisted path, manual review required"
+        fi
+
+        local project_root project_name ecosystem
+        project_root=$(get_purge_project_path "$item")
+        project_name=$(get_purge_project_name "$item")
+        ecosystem=$(mole_purge_ecosystem_for_artifact "$item")
+
+        PURGE_JSON_PATHS+=("$item")
+        PURGE_JSON_PROJECT_ROOTS+=("$project_root")
+        PURGE_JSON_PROJECT_NAMES+=("$project_name")
+        PURGE_JSON_NAMES+=("${item##*/}")
+        PURGE_JSON_SIZES_KB+=("$size_kb")
+        PURGE_JSON_SIZE_UNKNOWN+=("$size_unknown")
+        PURGE_JSON_RECENT_FLAGS+=("$recent")
+        PURGE_JSON_SELECTED_DEFAULT+=("$selected")
+        PURGE_JSON_ECOSYSTEMS+=("$ecosystem")
+        PURGE_JSON_PROTECTED+=("$protected")
+        PURGE_JSON_WHITELISTED+=("$whitelisted")
+        PURGE_JSON_RISK_LEVELS+=("$risk_level")
+        PURGE_JSON_RISK_REASONS+=("$risk_reason")
+    done < "$dedupe_output"
+    rm -f "$dedupe_output" 2> /dev/null || true
+}
+
+mole_purge_render_json() {
+    mole_purge_collect_json_items
+
+    local item_count=${#PURGE_JSON_PATHS[@]}
+    local total_size_bytes=0
+    local selected_size_bytes=0
+    local selected_count=0
+    local idx
+    for ((idx = 0; idx < item_count; idx++)); do
+        local size_kb="${PURGE_JSON_SIZES_KB[$idx]:-0}"
+        [[ "$size_kb" =~ ^[0-9]+$ ]] || size_kb=0
+        local size_bytes=$((size_kb * 1024))
+        total_size_bytes=$((total_size_bytes + size_bytes))
+        if [[ "${PURGE_JSON_SELECTED_DEFAULT[$idx]:-false}" == "true" ]]; then
+            selected_size_bytes=$((selected_size_bytes + size_bytes))
+            selected_count=$((selected_count + 1))
+        fi
+    done
+
+    printf '{\n'
+    mole_json_number_field "  " "schema_version" 1
+    mole_json_string_field "  " "command" "purge"
+    printf '  "items": ['
+    if [[ $item_count -gt 0 ]]; then
+        printf '\n'
+        for ((idx = 0; idx < item_count; idx++)); do
+            [[ $idx -gt 0 ]] && printf ',\n'
+            local size_kb="${PURGE_JSON_SIZES_KB[$idx]:-0}"
+            [[ "$size_kb" =~ ^[0-9]+$ ]] || size_kb=0
+            local size_bytes=$((size_kb * 1024))
+            printf '    {\n'
+            mole_json_string_field "      " "path" "${PURGE_JSON_PATHS[$idx]}"
+            mole_json_string_field "      " "name" "${PURGE_JSON_NAMES[$idx]}"
+            mole_json_string_field "      " "category" "project_artifact"
+            if [[ "${PURGE_JSON_ECOSYSTEMS[$idx]}" == "unknown" ]]; then
+                mole_json_null_field "      " "ecosystem"
+            else
+                mole_json_string_field "      " "ecosystem" "${PURGE_JSON_ECOSYSTEMS[$idx]}"
+            fi
+            if [[ "${PURGE_JSON_SIZE_UNKNOWN[$idx]:-false}" == "true" ]]; then
+                mole_json_null_field "      " "size_bytes"
+            else
+                mole_json_number_field "      " "size_bytes" "$size_bytes"
+            fi
+            mole_json_string_field "      " "risk_level" "${PURGE_JSON_RISK_LEVELS[$idx]}"
+            mole_json_string_field "      " "risk_reason" "${PURGE_JSON_RISK_REASONS[$idx]}"
+            mole_json_bool_field "      " "recoverable" false
+            mole_json_bool_field "      " "protected" "${PURGE_JSON_PROTECTED[$idx]}"
+            mole_json_bool_field "      " "whitelisted" "${PURGE_JSON_WHITELISTED[$idx]}"
+            mole_json_bool_field "      " "selected_by_default" "${PURGE_JSON_SELECTED_DEFAULT[$idx]}"
+            mole_json_string_field "      " "recommended_action" "purge"
+            mole_json_string_field "      " "project_root" "${PURGE_JSON_PROJECT_ROOTS[$idx]}"
+            mole_json_string_field "      " "project_name" "${PURGE_JSON_PROJECT_NAMES[$idx]}" ""
+            printf '    }'
+        done
+        printf '\n'
+    fi
+    printf '  ],\n'
+    printf '  "summary": {\n'
+    mole_json_number_field "    " "total_size_bytes" "$total_size_bytes"
+    mole_json_number_field "    " "item_count" "$item_count"
+    mole_json_number_field "    " "selected_size_bytes" "$selected_size_bytes"
+    mole_json_number_field "    " "selected_count" "$selected_count" ""
+    printf '  }\n'
+    printf '}\n'
+}
 # Args: $1 - path
 # Check if a path was modified recently (safety check).
 is_recently_modified() {
@@ -588,10 +959,19 @@ is_recently_modified() {
     fi
     local mod_time
     mod_time=$(get_file_mtime "$path")
+    if [[ ! "$mod_time" =~ ^[0-9]+$ || "$mod_time" -le 0 ]]; then
+        mod_time=$(stat -c %Y "$path" 2> /dev/null || echo "0")
+    fi
     if [[ -z "$current_time" || ! "$current_time" =~ ^[0-9]+$ ]]; then
         current_time=$(get_epoch_seconds)
     fi
+    if [[ ! "$mod_time" =~ ^[0-9]+$ || "$mod_time" -le 0 ]]; then
+        return 0 # Unknown or future mtime, be conservative
+    fi
     local age_seconds=$((current_time - mod_time))
+    if [[ "$age_seconds" -lt 0 ]]; then
+        return 0 # Future mtime, be conservative
+    fi
     local age_in_days=$((age_seconds / 86400))
     if [[ $age_in_days -lt $age_days ]]; then
         return 0 # Recently modified

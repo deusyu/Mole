@@ -14,7 +14,10 @@ command_words="${command_names[*]}"
 clean_option_words="--dry-run -n --external --whitelist --debug --help -h"
 analyze_option_words="--json --help -h"
 history_option_words="--json --limit --help -h"
-purge_option_words="--paths --dry-run -n --include-empty --debug --help -h"
+report_option_words="--json --markdown --help -h"
+purge_option_words="--json --paths --dry-run -n --include-empty --debug --help -h"
+installer_option_words="--json --dry-run -n --debug --help -h"
+uninstall_option_words="--list --json --dry-run -n --permanent --debug --help -h"
 
 emit_zsh_subcommands() {
     for entry in "${MOLE_COMMANDS[@]}"; do
@@ -42,6 +45,20 @@ emit_fish_completions() {
     printf 'complete -f -c %s -n "__fish_seen_subcommand_from history" -l json -d "Output history as JSON"\n' "$cmd"
     printf 'complete -f -c %s -n "__fish_seen_subcommand_from history" -l limit -r -d "Limit recent entries"\n' "$cmd"
     printf 'complete -f -c %s -n "__fish_seen_subcommand_from history" -l help -s h -d "Show help"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from report" -l json -d "Output developer space report as JSON"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from report" -l markdown -d "Output developer space report as Markdown"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from report" -l help -s h -d "Show help"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from uninstall" -l list -d "List installed apps"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from uninstall" -l json -d "Output --list inventory as JSON"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from uninstall" -l dry-run -s n -d "Preview app uninstallation without making changes"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from uninstall" -l permanent -d "Bypass macOS Trash"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from uninstall" -l debug -d "Show detailed logs"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from uninstall" -l help -s h -d "Show help"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from installer" -l json -d "Output installer inventory as JSON"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from installer" -l dry-run -s n -d "Preview installer cleanup without making changes"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from installer" -l debug -d "Show detailed logs"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from installer" -l help -s h -d "Show help"\n' "$cmd"
+    printf 'complete -f -c %s -n "__fish_seen_subcommand_from purge" -l json -d "Output purge inventory as JSON"\n' "$cmd"
     printf 'complete -f -c %s -n "__fish_seen_subcommand_from purge" -l paths -d "Edit custom scan directories"\n' "$cmd"
     printf 'complete -f -c %s -n "__fish_seen_subcommand_from purge" -l dry-run -s n -d "Preview purge actions without making changes"\n' "$cmd"
     printf 'complete -f -c %s -n "__fish_seen_subcommand_from purge" -l include-empty -d "Show zero-size project artifact directories"\n' "$cmd"
@@ -342,6 +359,15 @@ _mole_completions()
             history)
                 COMPREPLY=( \$(compgen -W "$history_option_words" -- "\$cur_word") )
                 ;;
+            report)
+                COMPREPLY=( \$(compgen -W "$report_option_words" -- "\$cur_word") )
+                ;;
+            uninstall)
+                COMPREPLY=( \$(compgen -W "$uninstall_option_words" -- "\$cur_word") )
+                ;;
+            installer)
+                COMPREPLY=( \$(compgen -W "$installer_option_words" -- "\$cur_word") )
+                ;;
             purge)
                 COMPREPLY=( \$(compgen -W "$purge_option_words" -- "\$cur_word") )
                 ;;
@@ -391,12 +417,37 @@ EOF
         printf "                '--limit[Limit recent entries]:limit:' \\\\\n"
         printf "                '(-h --help)'{-h,--help}'[Show help]'\n"
         printf '            ;;\n'
+        printf '        report)\n'
+        printf '            _arguments \\\n'
+        printf "                '--json[Output developer space report as JSON]' \\\\\n"
+        printf "                '--markdown[Output developer space report as Markdown]' \\\\\n"
+        printf "                '(-h --help)'{-h,--help}'[Show help]'\n"
+        printf '            ;;\n'
         printf '        purge)\n'
         printf '            _arguments \\\n'
+        printf "                '--json[Output purge inventory as JSON]' \\\\\n"
         printf "                '--paths[Edit custom scan directories]' \\\\\n"
         printf "                '--dry-run[Preview purge actions without making changes]' \\\\\n"
         printf "                '-n[Preview purge actions without making changes]' \\\\\n"
         printf "                '--include-empty[Show zero-size project artifact directories]' \\\\\n"
+        printf "                '--debug[Show detailed logs]' \\\\\n"
+        printf "                '(-h --help)'{-h,--help}'[Show help]'\n"
+        printf '            ;;\n'
+        printf '        installer)\n'
+        printf '            _arguments \\\n'
+        printf "                '--json[Output installer inventory as JSON]' \\\\\n"
+        printf "                '--dry-run[Preview installer cleanup without making changes]' \\\\\n"
+        printf "                '-n[Preview installer cleanup without making changes]' \\\\\n"
+        printf "                '--debug[Show detailed logs]' \\\\\n"
+        printf "                '(-h --help)'{-h,--help}'[Show help]'\n"
+        printf '            ;;\n'
+        printf '        uninstall)\n'
+        printf '            _arguments \\\n'
+        printf "                '--list[List installed apps]' \\\\\n"
+        printf "                '--json[Output --list inventory as JSON]' \\\\\n"
+        printf "                '--dry-run[Preview app uninstallation without making changes]' \\\\\n"
+        printf "                '-n[Preview app uninstallation without making changes]' \\\\\n"
+        printf "                '--permanent[Bypass macOS Trash]' \\\\\n"
         printf "                '--debug[Show detailed logs]' \\\\\n"
         printf "                '(-h --help)'{-h,--help}'[Show help]'\n"
         printf '            ;;\n'

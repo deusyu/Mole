@@ -11,6 +11,14 @@ export LANG=C
 
 # Get script directory and source common functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+for arg in "$@"; do
+    if [[ "$arg" == "--json" ]]; then
+        export MOLE_PURGE_NO_CONFIG_WRITE=1
+        break
+    fi
+done
+
 source "$SCRIPT_DIR/../lib/core/common.sh"
 
 # Restores cursor and clears temp files even when set -e aborts (#915).
@@ -290,6 +298,7 @@ show_help() {
     echo -e "${YELLOW}Usage:${NC} mo purge [options]"
     echo ""
     echo -e "${YELLOW}Options:${NC}"
+    echo "  --json          Output project artifact inventory as read-only JSON"
     echo "  --paths         Edit custom scan directories"
     echo "  --dry-run       Preview purge actions without making changes"
     echo "  --include-empty Show zero-size project artifact directories"
@@ -304,6 +313,7 @@ show_help() {
 
 # Main entry point
 main() {
+    local json_mode=0
     # Parse arguments
     for arg in "$@"; do
         case "$arg" in
@@ -319,6 +329,10 @@ main() {
             "--debug")
                 export MO_DEBUG=1
                 ;;
+            "--json")
+                json_mode=1
+                export MOLE_PURGE_NO_CONFIG_WRITE=1
+                ;;
             "--dry-run" | "-n")
                 export MOLE_DRY_RUN=1
                 ;;
@@ -332,6 +346,11 @@ main() {
                 ;;
         esac
     done
+
+    if [[ $json_mode -eq 1 ]]; then
+        mole_purge_render_json
+        return 0
+    fi
 
     start_purge
     if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
