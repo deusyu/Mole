@@ -186,3 +186,33 @@ These are real bugs hit on this codebase. Each one cost time. Re-read before tou
 - **Pick icons that match the action, not the category**. A broom (🧹) on insight rows mis-signalled "all of these are safe to delete", which is wrong for iOS Backups, Xcode Archives, and Old Downloads. Eyes (👀) match "look here" without that false promise.
 - **No em dash anywhere in user-facing text**. Use commas, periods, colons, or semicolons. (Global rule, but worth re-stating because it has been violated repeatedly in release drafts.)
 - **No parenthesised PR refs or thanks inline**. Move PR numbers and contributor handles to a single closing thanks block to keep the changelog scannable.
+
+## Cursor Cloud specific instructions
+
+This section applies to Cloud Agents running in a Linux VM. The update script handles dependency refresh; below are non-obvious runtime caveats.
+
+### Environment
+
+- Go 1.25.0 is pre-installed at `/usr/bin/go`. Go tools (`shfmt`, `goimports`, `golangci-lint`) are in `~/go/bin`.
+- `bats` is installed via npm at `~/.npm-global/bin/bats`.
+- ShellCheck 0.10.0 is at `/usr/local/bin/shellcheck`.
+- PATH must include `$HOME/go/bin:$HOME/.npm-global/bin` (already in `~/.bashrc`).
+
+### Running tests
+
+- Go tests: `go test ./...` passes on Linux. The `cmd/analyze` tests have `//go:build darwin` and are skipped on Linux; this is expected.
+- Bats tests: `MOLE_TEST_NO_AUTH=1 bats tests/<file>.bats`. Some tests fail on Linux due to macOS-specific behavior (PTY allocation, `du` byte rounding, `osascript` stubs). Focus verification on tests that pass per-file rather than the full suite.
+- The full test runner (`./scripts/test.sh`) lints test files with shellcheck before running bats. If stale `tests/tmp-*` directories exist from prior runs (containing Go module caches), shellcheck may report false positives on vendored `.sh` files. Clean with `rm -rf tests/tmp-*` before re-running.
+- `make verify` runs `./scripts/check.sh --no-format` then `go test ./...`. ShellCheck warnings are pre-existing (info-level SC2015, SC2317); golangci-lint passes cleanly.
+
+### Building and running
+
+- `make build` compiles `bin/analyze-go` and `bin/status-go` for the current architecture.
+- `MOLE_TEST_NO_AUTH=1 MOLE_DRY_RUN=1 ./mole clean --dry-run` demonstrates the shell tool end-to-end without any destructive actions.
+- `./bin/status-go --json` outputs system health metrics; works on Linux.
+- `./bin/analyze-go` requires macOS (exits with message on Linux).
+
+### Gotchas
+
+- The nvm `.npmrc` warning (`has a globalconfig and/or a prefix setting`) is cosmetic noise from having set `npm config set prefix ~/.npm-global`. It does not affect functionality.
+- `parallel` (GNU) is installed for bats parallel file execution support.
